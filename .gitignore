@@ -24,3 +24,9 @@ backend/.cache/
 *.swp
 *.tmp
 *.bak
+
+# coverage reports
+coverage/
+frontend/coverage/
+backend/coverage/
+
