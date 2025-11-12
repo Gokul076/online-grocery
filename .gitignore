@@ -30,3 +30,7 @@ coverage/
 frontend/coverage/
 backend/coverage/
 
+
+# Node modules
+node_modules/
+backend/node_modules/
