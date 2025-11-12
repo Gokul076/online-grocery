@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import Navbar from '../components/Navbar';
 import './AdminDashboard.css';
 import sharedProducts from '../data/products';
-import { fetchProducts, createProduct as apiCreateProduct, updateProduct as apiUpdateProduct, deleteProductApi, fetchOrders, updateOrderStatusApi, fetchAgents, assignOrderApi, fetchUsers } from '../mockApi';
+import { fetchProducts, createProduct as apiCreateProduct, updateProduct as apiUpdateProduct, deleteProductApi, fetchOrders, updateOrderStatusApi, fetchAgents, assignOrderApi, fetchUsers, adjustProductStock } from '../mockApi';
 
 const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState('users');
@@ -14,9 +14,9 @@ const AdminDashboard = () => {
   const [orders, setOrders] = useState([]);
   const [agents, setAgents] = useState([]);
   const [assignments, setAssignments] = useState({});
-  const [expandedOrders, setExpandedOrders] = useState({});
 
   const [users, setUsers] = useState([]);
+  const [expandedOrders, setExpandedOrders] = useState([]); // list of order ids that are expanded to show items
 
   // Load data from API; fallback to seed/localStorage on failure
   useEffect(() => {
@@ -27,9 +27,9 @@ const AdminDashboard = () => {
       { id: 'ORD-1003', customer: 'Charlie', total: 990, status: 'shipped' }
     ];
     const seedAgents = [
-      { id: 'AG-1', name: 'Ravi Kumar', email: 'ravi@delivery.com',  },
-      { id: 'AG-2', name: 'naveen', email: 'naveen@delivery.com', },
-      { id: 'AG-3', name: 'Rahul', email: 'rahul@delivery.com',  }
+      { id: 'AG-1', name: 'Ravi Kumar', email: 'ravi@delivery.com' },
+      { id: 'AG-2', name: 'Prem', email: 'prem@delivery.com' },
+      { id: 'AG-3', name: 'Rahul', email: 'rahul@delivery.com' }
     ];
     async function load() {
       try {
@@ -52,8 +52,13 @@ const AdminDashboard = () => {
         
         // Products from API
         if (Array.isArray(pRes)) setProducts(pRes.map(p => ({ ...p, id: p._id })));
-        // Orders from API
-        if (Array.isArray(oRes)) setOrders(oRes.map(o => ({ ...o, id: o.orderId || o.id })));
+        // Orders from API: normalize customer field and capture created date (some APIs use customerName or customerEmail)
+        if (Array.isArray(oRes)) setOrders(oRes.map(o => ({
+          ...o,
+          id: o.orderId || o.id,
+          customer: o.customerName || o.customer || o.customerEmail || 'Unknown',
+          orderDate: o.createdAt || o.created_at || o.orderDate || o.date || null
+        })));
         // Agents from API (delivery users)
         if (Array.isArray(aRes) && aRes.length) setAgents(aRes);
         else setAgents(seedAgents);
@@ -110,6 +115,27 @@ const AdminDashboard = () => {
     if (!q) return orders;
     return orders.filter(o => `${o.id} ${o.customer} ${o.status}`.toLowerCase().includes(q));
   }, [orders, orderSearch]);
+
+  // Helper: format a date for a record (order/user). Prefer explicit createdAt/orderDate fields,
+  // otherwise attempt to derive from a Mongo ObjectId (_id) timestamp. Return 'Unknown' if not possible.
+  function formatDateFrom(rec) {
+    if (!rec) return 'Unknown';
+    // If a raw date/string/number was passed
+    if (typeof rec === 'string' || typeof rec === 'number') {
+      try { return new Date(rec).toLocaleDateString(); } catch (e) { return 'Unknown'; }
+    }
+    const possible = rec.createdAt || rec.created_at || rec.orderDate || rec.order_date || rec.date;
+    if (possible) {
+      try { return new Date(possible).toLocaleDateString(); } catch (e) { /* fallthrough */ }
+    }
+    if (rec._id && typeof rec._id === 'string' && rec._id.length >= 8) {
+      try { return new Date(parseInt(rec._id.substring(0,8), 16) * 1000).toLocaleDateString(); } catch (e) { /* fallthrough */ }
+    }
+    if (rec.id && typeof rec.id === 'string' && rec.id.length >= 8) {
+      try { return new Date(parseInt(rec.id.substring(0,8), 16) * 1000).toLocaleDateString(); } catch (e) { /* fallthrough */ }
+    }
+    return 'Unknown';
+  }
 
   function openNewProductModal() {
     setEditingProduct({ id: null, name: '', stock: 0, price: 0 });
@@ -182,10 +208,6 @@ const AdminDashboard = () => {
     const nextAssignments = { ...assignments, [orderId]: agentEmail };
     setAssignments(nextAssignments);
     try { localStorage.setItem('delivery_assignments', JSON.stringify(nextAssignments)); } catch {}
-  }
-
-  function toggleExpand(orderKey) {
-    setExpandedOrders(prev => ({ ...prev, [orderKey]: !prev[orderKey] }));
   }
 
   function exportCsv(rows, filename) {
@@ -332,7 +354,9 @@ const AdminDashboard = () => {
                       <td style={{ padding: '16px 20px' }}>
                         <button 
                           onClick={() => {
-                            alert(`User Details:\n\nID: ${u.id || u._id}\nName: ${u.name}\nEmail: ${u.email}\nRole: ${u.role}\n\nAdditional Info:\n- Account Status: Active\n- Registration Date: ${new Date().toLocaleDateString()}\n- Last Login: ${new Date().toLocaleDateString()}`);
+                            // Show registration date (createdAt) only — last-login info removed
+                            const regDate = formatDateFrom(u);
+                            alert(`User Details:\n\nID: ${u.id || u._id}\nName: ${u.name}\nEmail: ${u.email}\nRole: ${u.role}\n\nAdditional Info:\n- Account Status: Active\n- Registration Date: ${regDate}`);
                           }}
                           style={{
                             background: 'linear-gradient(135deg, #667eea, #764ba2)',
@@ -495,7 +519,39 @@ const AdminDashboard = () => {
                         fontWeight: '500',
                         textAlign: 'center'
                       }}>
-                        {p.stock}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                          <button
+                            className="btn small"
+                            onClick={async () => {
+                              try {
+                                const updated = await adjustProductStock(p._id || p.id, -1);
+                                setProducts(products.map(x => (x._id === updated._id || x.id === updated._id) ? { ...updated, id: updated._id } : x));
+                              } catch (err) {
+                                console.error('Error decrementing stock', err);
+                                alert(err.message || 'Could not decrement stock');
+                              }
+                            }}
+                            style={{ padding: '6px 8px' }}
+                          >
+                            -
+                          </button>
+                          <div style={{ minWidth: 40, textAlign: 'center', fontWeight: 600 }}>{p.stock}</div>
+                          <button
+                            className="btn small"
+                            onClick={async () => {
+                              try {
+                                const updated = await adjustProductStock(p._id || p.id, 1);
+                                setProducts(products.map(x => (x._id === updated._id || x.id === updated._id) ? { ...updated, id: updated._id } : x));
+                              } catch (err) {
+                                console.error('Error incrementing stock', err);
+                                alert(err.message || 'Could not increment stock');
+                              }
+                            }}
+                            style={{ padding: '6px 8px' }}
+                          >
+                            +
+                          </button>
+                        </div>
                       </td>
                       <td style={{ 
                         color: '#2d3748', 
@@ -610,168 +666,123 @@ const AdminDashboard = () => {
                     <th style={{ color: '#2d3748', fontWeight: '600', fontSize: '16px', padding: '16px 20px', width: '15%' }}>Order ID</th>
                     <th style={{ color: '#2d3748', fontWeight: '600', fontSize: '16px', padding: '16px 20px', width: '20%' }}>Customer</th>
                     <th style={{ color: '#2d3748', fontWeight: '600', fontSize: '16px', padding: '16px 20px', width: '15%' }}>Total (₹)</th>
-                    <th style={{ color: '#2d3748', fontWeight: '600', fontSize: '16px', padding: '16px 20px', width: '15%' }}>Status</th>
+                    {/* Status column removed per request */}
                     <th style={{ color: '#2d3748', fontWeight: '600', fontSize: '16px', padding: '16px 20px', width: '20%' }}>Assigned To</th>
                     <th style={{ color: '#2d3748', fontWeight: '600', fontSize: '16px', padding: '16px 20px', width: '15%' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredOrders.map((o) => {
-                    // Resolve customer name: prefer customerName, fall back to customer, then try to lookup user by email or id
-                    const customerName = o.customerName || o.customer || (() => {
-                      if (!users || !users.length) return 'Unknown';
-                      const byEmail = users.find(u => u.email && (u.email === (o.customerEmail || o.customer) || u.email === o.assignedTo));
-                      if (byEmail) return byEmail.name;
-                      const byId = users.find(u => (u.id === o.customer) || (u._id === o.customer) || (u.id === o.customerId));
-                      if (byId) return byId.name;
-                      return o.customerEmail || 'Unknown';
-                    })();
-                    const orderKey = o._id || o.id || o.orderId;
+                  {filteredOrders.map((o) => (
+                    <React.Fragment key={o.id}>
+                      <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                      <td style={{ 
+                        color: '#4a5568', 
+                        fontSize: '14px', 
+                        fontFamily: 'monospace',
+                        padding: '16px 20px',
+                        wordBreak: 'break-all'
+                      }}>
+                        {o.orderId || o.id}
+                      </td>
+                      <td style={{ 
+                        color: '#2d3748', 
+                        fontSize: '15px', 
+                        fontWeight: '500',
+                        padding: '16px 20px'
+                      }}>
+                        {o.customer}
+                      </td>
+                      <td style={{ 
+                        color: '#2d3748', 
+                        fontSize: '15px',
+                        padding: '16px 20px',
+                        fontWeight: '600',
+                        textAlign: 'center'
+                      }}>
+                        ₹{Number(o.total).toFixed(2)}
+                      </td>
+                      {/* Status column removed */}
+                      <td className="assign-td">
+                        <select
+                          className="select assign-select"
+                          value={assignments[o.orderId || o.id] || o.assignedTo || ''}
+                          onChange={(e) => assignAgentToOrder(o.orderId || o.id, e.target.value)}
+                        >
+                          <option value="">Unassigned</option>
+                          {agents.map(a => (
+                            <option key={a.email} value={a.email}>{a.name}{a.city ? ` (${a.city})` : ''}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{ padding: '16px 20px' }}>
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                          <button
+                            className="btn small"
+                            onClick={() => {
+                              const customerName = o.customer;
+                              const assigned = assignments[o.orderId || o.id] || o.assignedTo || 'Unassigned';
+                              const items = (o.items || []).map(it => `${it.name} x${it.quantity} @ ₹${it.price}`).join('\n');
+                              alert(`Order Details:\n\nOrder ID: ${o.orderId || o.id}\nCustomer: ${customerName}\nTotal: ₹${Number(o.total).toFixed(2)}\nAssigned To: ${assigned}\n\nItems:\n${items}\n\nOrder Date: ${formatDateFrom(o)}`);
+                            }}
+                            style={{
+                              background: 'linear-gradient(135deg, #667eea, #764ba2)',
+                              color: 'white',
+                              border: 'none',
+                              padding: '6px 12px',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: '600',
+                              cursor: 'pointer',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.5px'
+                            }}
+                          >
+                            View
+                          </button>
 
-                    const isExpanded = !!expandedOrders[orderKey];
-
-                    return (
-                      <React.Fragment key={orderKey}>
-                        <tr className="order-main-row" style={{ borderBottom: '1px solid #e2e8f0' }}>
-                          <td style={{ 
-                            color: '#4a5568', 
-                            fontSize: '14px', 
-                            fontFamily: 'monospace',
-                            padding: '16px 20px',
-                            wordBreak: 'break-all'
-                          }}>
-                            {o.orderId || o.id}
-                          </td>
-                          <td style={{ 
-                            color: '#2d3748', 
-                            fontSize: '15px', 
-                            fontWeight: '500',
-                            padding: '16px 20px'
-                          }}>
-                            {customerName}
-                          </td>
-                          <td style={{ 
-                            color: '#2d3748', 
-                            fontSize: '15px',
-                            padding: '16px 20px',
-                            fontWeight: '600',
-                            textAlign: 'center'
-                          }}>
-                            <div>₹{Number(o.total).toFixed(2)}</div>
-                            <div style={{ fontSize: 12, color: '#718096', marginTop: 6 }}>{(o.items && o.items.length) ? `${o.items.length} item${o.items.length > 1 ? 's' : ''}` : '0 items'}</div>
-                          </td>
-                          <td style={{ padding: '16px 20px' }}>
-                            <select 
-                              className="select" 
-                              value={o.status} 
-                              onChange={(e) => updateOrderStatus(o._id || o.id, e.target.value)}
-                              style={{
-                                padding: '8px 12px',
-                                borderRadius: '6px',
-                                border: '1px solid #e2e8f0',
-                                fontSize: '14px',
-                                backgroundColor: 'black',
-                                minWidth: '120px'
-                              }}
-                            >
-                              <option value="pending">pending</option>
-                              <option value="delivered">delivered</option>
-                            </select>
-                          </td>
-                          <td style={{ padding: '16px 20px' }}>
-                            <select
-                              className="select"
-                              value={assignments[o.orderId || o.id] || o.assignedTo || ''}
-                              onChange={(e) => assignAgentToOrder(o.orderId || o.id, e.target.value)}
-                              style={{
-                                padding: '8px 12px',
-                                borderRadius: '6px',
-                                border: '1px solid #e2e8f0',
-                                fontSize: '14px',
-                                backgroundColor: 'black',
-                                minWidth: '150px'
-                              }}
-                            >
-                              <option value="">Unassigned</option>
-                              {agents.map(a => (
-                                <option key={a.email} value={a.email}>{a.name}{a.city ? ` (${a.city})` : ''}</option>
-                              ))}
-                            </select>
-                          </td>
-                          <td style={{ padding: '16px 20px' }}>
-                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                              <button
-                                className="btn small"
-                                onClick={() => toggleExpand(orderKey)}
-                                style={{
-                                  background: isExpanded ? '#e2e8f0' : 'linear-gradient(135deg, #667eea, #764ba2)',
-                                  color: isExpanded ? '#4a5568' : 'white',
-                                  border: 'none',
-                                  padding: '6px 12px',
-                                  borderRadius: '6px',
-                                  fontSize: '12px',
-                                  fontWeight: '600',
-                                  cursor: 'pointer',
-                                  textTransform: 'uppercase',
-                                  letterSpacing: '0.5px'
-                                }}
-                              >
-                                {isExpanded ? 'Hide' : 'Details'}
-                              </button>
-                              <button 
-                                className="btn small" 
-                                onClick={() => {
-                                  const assigned = assignments[o.orderId || o.id] || o.assignedTo || 'Unassigned';
-                                  const itemsSummary = (o.items || []).map(it => `${it.name} x${it.quantity} @ ₹${it.price}`).join('\n');
-                                  alert(`Order Details:\n\nOrder ID: ${o.orderId || o.id}\nCustomer: ${customerName}\nEmail: ${o.customerEmail || ''}\nTotal: ₹${Number(o.total).toFixed(2)}\nStatus: ${o.status}\nAssigned To: ${assigned}\n\nItems:\n${itemsSummary}\n\nOrder Date: ${new Date().toLocaleDateString()}\nPayment Status: ${o.status === 'paid' ? 'Paid' : 'Pending'}`);
-                                }}
-                                style={{
-                                  background: 'linear-gradient(135deg, #667eea, #764ba2)',
-                                  color: 'white',
-                                  border: 'none',
-                                  padding: '6px 12px',
-                                  borderRadius: '6px',
-                                  fontSize: '12px',
-                                  fontWeight: '600',
-                                  cursor: 'pointer',
-                                  textTransform: 'uppercase',
-                                  letterSpacing: '0.5px'
-                                }}
-                              >
-                                View
-                              </button>
-                              {/* removed Mark Paid: orders are marked paid only via payment gateway */}
+                          <button
+                            className="btn small details"
+                            onClick={() => {
+                              const id = o.orderId || o.id;
+                              setExpandedOrders(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+                            }}
+                            aria-expanded={expandedOrders.includes(o.orderId || o.id)}
+                          >
+                            Items
+                          </button>
+                        </div>
+                      </td>
+                      </tr>
+                      {expandedOrders.includes(o.orderId || o.id) && (
+                        <tr className="order-items-row">
+                          <td colSpan={5}>
+                            <div className="order-items-container">
+                              <table className="order-items-table">
+                              <thead>
+                                <tr>
+                                  <th>Product</th>
+                                  <th>Qty</th>
+                                  <th>Price (₹)</th>
+                                  <th>Subtotal (₹)</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(o.items || []).map((it, idx) => (
+                                  <tr key={idx}>
+                                    <td>{it.name}</td>
+                                    <td>{it.quantity}</td>
+                                    <td>₹{Number(it.price).toFixed(2)}</td>
+                                    <td>₹{(Number(it.price) * Number(it.quantity)).toFixed(2)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              </table>
                             </div>
                           </td>
                         </tr>
-                        {/* render a sub-row that lists items for the order when expanded */}
-                        {isExpanded && (o.items && o.items.length > 0) && (
-                          <tr className="order-items-row">
-                            <td colSpan={6} style={{ padding: '8px 20px' }}>
-                              <table className="order-items-table">
-                                <thead>
-                                  <tr>
-                                    <th style={{ textAlign: 'left' }}>Product</th>
-                                    <th style={{ width: 90, textAlign: 'center' }}>Qty</th>
-                                    <th style={{ width: 140, textAlign: 'right' }}>Price (₹)</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {(o.items || []).map((it, idx) => (
-                                    <tr key={idx}>
-                                      <td style={{ padding: '8px 10px' }}>{it.name}</td>
-                                      <td style={{ padding: '8px 10px', textAlign: 'center' }}>{it.quantity}</td>
-                                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>₹{Number(it.price).toFixed(2)}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
+                      )}
+                    </React.Fragment>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -877,7 +888,7 @@ const AdminDashboard = () => {
                           <button 
                             className="btn small" 
                             onClick={() => {
-                              alert(`Downloading report: ${r.name}\n\nDownloaded Successfully`);
+                              alert(`Downloading report: ${r.name}\n\nThis would typically download the report file.\nFor demo purposes, this shows the download action.`);
                             }}
                             style={{
                               background: 'linear-gradient(135deg, #4facfe, #00f2fe)',

@@ -69,6 +69,15 @@ export const updateProduct = async (id, updates) => {
   return handleJson(res);
 };
 
+export const adjustProductStock = async (id, delta) => {
+  const res = await fetch(`${API}/products/${id}/adjust-stock`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ delta })
+  });
+  return handleJson(res);
+};
+
 export const deleteProductApi = async (id) => {
   const res = await fetch(`${API}/products/${id}`, { method: 'DELETE', headers: authHeaders() });
   return handleJson(res);

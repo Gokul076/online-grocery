@@ -1,5 +1,26 @@
+# Node modules
+node_modules/
 backend/node_modules/
+
+# Environment files
 .env
 backend/.env
-backend/node_modules/
-backend/.env
+
+# Logs
+*.log
+
+# MacOS system files
+.DS_Store
+
+# Editor / IDE configs
+.vscode/
+.idea/
+
+# Cache folders
+.cache/
+backend/.cache/
+
+# Temporary files
+*.swp
+*.tmp
+*.bak

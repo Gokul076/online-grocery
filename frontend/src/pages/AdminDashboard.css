@@ -157,6 +157,41 @@
   font-size: 14px;
 }
 
+/* Assigned To column specific styles */
+.assign-td {
+  padding: 16px 20px;
+  vertical-align: middle;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.assign-select {
+  background: transparent;
+  border: 1px solid rgba(14, 30, 37, 0.06);
+  border-radius: 10px;
+  padding: 8px 12px;
+  height: 40px;
+  width: 100%;
+  max-width: 220px;
+  box-sizing: border-box;
+  color: #2d3748;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+.assign-select:focus,
+.assign-select:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border-color: rgba(14, 30, 37, 0.12);
+}
+
+.assign-select option[disabled] {
+  color: #aab3bb;
+}
+
 /* Nested order items table for orders tab */
 .order-items-row td {
   background: #fafafa;
@@ -169,6 +204,7 @@
   width: 100%;
   border-collapse: collapse;
   background: transparent;
+  table-layout: auto; /* allow natural column widths inside the nested table */
 }
 
 .order-items-table th {
@@ -184,6 +220,17 @@
   border: 1px solid #f0f0f0;
   padding: 6px 10px;
   font-size: 14px;
+}
+
+/* container to ensure nested table spans full cell and aligns */
+.order-items-container {
+  padding: 12px 20px;
+  background: transparent;
+  overflow: auto;
+}
+
+.order-items-table thead th, .order-items-table tbody td {
+  white-space: nowrap; /* prevent wrapping that causes layout shifts */
 }
 
 .order-items-table tbody tr td:first-child {

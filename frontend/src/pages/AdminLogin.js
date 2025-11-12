@@ -26,7 +26,7 @@ function AdminLogin() {
         alert('Not an admin account');
         return;
       }
-      localStorage.setItem('currentUser', JSON.stringify({ name: res.user.name, email: res.user.email, role: res.user.role }));
+  localStorage.setItem('currentUser', JSON.stringify({ name: res.user.name, email: res.user.email, role: res.user.role }));
       history.push('/admin');
     } finally {
       setLoading(false);

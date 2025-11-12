@@ -21,9 +21,9 @@ function Login() {
         alert(res.msg || 'Invalid credentials');
         return;
       }
-      const role = res.user.role;
-      const name = res.user.name;
-      localStorage.setItem('currentUser', JSON.stringify({ name, email, role }));
+  const role = res.user.role;
+  const name = res.user.name;
+  localStorage.setItem('currentUser', JSON.stringify({ name, email, role }));
       if (role === 'admin') history.push('/admin');
       else if (role === 'delivery') history.push('/delivery');
       else history.push('/dashboard');

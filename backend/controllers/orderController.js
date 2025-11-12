@@ -1,4 +1,5 @@
 const Order = require('../model/order');
+const Product = require('../model/product');
 
 exports.listOrders = async (req, res) => {
   try {
@@ -11,12 +12,31 @@ exports.listOrders = async (req, res) => {
 
 exports.createOrder = async (req, res) => {
   try {
-    const { orderId, customerName, customerEmail, total, items } = req.body;
-    const o = new Order({ orderId, customerName, customerEmail, total, items, status: 'pending' });
+    const { orderId, customerName, customerEmail, total, items, paid } = req.body;
+    // Validate items
+    if (!Array.isArray(items) || !items.length) return res.status(400).json({ msg: 'No items provided' });
+
+    // Pre-check stock availability
+    for (const it of items) {
+      const prod = await Product.findById(it.productId);
+      if (!prod) return res.status(400).json({ msg: `Product not found: ${it.productId}` });
+      if (typeof prod.stock === 'number' && prod.stock < Number(it.quantity)) {
+        return res.status(400).json({ msg: `Insufficient stock for product ${prod.name}` });
+      }
+    }
+
+    // Decrement stock for each item
+    for (const it of items) {
+      await Product.findByIdAndUpdate(it.productId, { $inc: { stock: -Math.max(0, Number(it.quantity) || 0) } });
+    }
+
+    const status = paid ? 'paid' : 'pending';
+    const o = new Order({ orderId, customerName, customerEmail, total, items, status });
     await o.save();
     res.status(201).json(o);
   } catch (err) {
-    res.status(400).json({ msg: 'Invalid data' });
+    console.error('[API] Error creating order:', err);
+    res.status(400).json({ msg: 'Invalid data', error: err.message });
   }
 };
 
